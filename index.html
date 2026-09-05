@@ -1,0 +1,587 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>VOB 轉檔工具</title>
+<script src="vendor/ffmpeg/ffmpeg.js"></script>
+<script src="vendor/util/index.js"></script>
+<script src="https://unpkg.com/jszip@3.10.1/dist/jszip.min.js"></script>
+<style>
+  :root {
+    --bg: #14161a;
+    --panel: #1c1f25;
+    --panel-2: #22262e;
+    --panel-3: #292d35;
+    --line: #30343c;
+    --text: #e8e9ec;
+    --muted: #8b909c;
+    --accent: #4fb0ae;
+    --accent-dim: #3a807f;
+    --warn: #d98c4f;
+    --error: #d9636b;
+    --mono: 'SFMono-Regular', Consolas, 'Liberation Mono', Menlo, monospace;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    background: var(--bg);
+    color: var(--text);
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang TC", "Microsoft JhengHei", sans-serif;
+    padding: 40px 20px;
+    display: flex;
+    justify-content: center;
+  }
+  .wrap { width: 100%; max-width: 620px; }
+  h1 { font-size: 22px; font-weight: 600; margin: 0 0 4px; letter-spacing: 0.2px; }
+  .sub { color: var(--muted); font-size: 13.5px; margin: 0 0 28px; line-height: 1.5; }
+  .panel { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 22px; margin-bottom: 16px; }
+  .section-label { font-size: 13px; color: var(--muted); margin: 0 0 10px; }
+  .section-label:not(:first-child) { margin-top: 22px; }
+
+  /* --- drop zone --- */
+  .drop {
+    border: 1.5px dashed var(--line);
+    border-radius: 8px;
+    padding: 28px 16px;
+    text-align: center;
+    cursor: pointer;
+    transition: border-color .15s ease, background .15s ease;
+  }
+  .drop:hover, .drop.dragover { border-color: var(--accent); background: rgba(79,176,174,0.06); }
+  .drop .icon { font-size: 26px; margin-bottom: 8px; opacity: 0.8; }
+  .drop .main-txt { font-size: 14.5px; color: var(--text); }
+  .drop .sub-txt { font-size: 12.5px; color: var(--muted); margin-top: 4px; }
+  #fileInput { display: none; }
+
+  /* --- file queue list --- */
+  .queue { margin-top: 14px; display: flex; flex-direction: column; gap: 8px; }
+  .qrow {
+    background: var(--panel-2);
+    border: 1px solid var(--line);
+    border-radius: 8px;
+    padding: 10px 12px;
+  }
+  .qrow-top { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
+  .qrow-name { font-family: var(--mono); font-size: 12.5px; word-break: break-all; flex: 1; }
+  .qrow-size { color: var(--muted); font-size: 11.5px; white-space: nowrap; }
+  .qrow-remove { background: none; border: none; color: var(--muted); cursor: pointer; font-size: 13px; padding: 2px 6px; }
+  .qrow-remove:hover { color: var(--error); }
+  .qrow-status { font-size: 11.5px; color: var(--muted); margin-top: 6px; display: none; }
+  .qrow-status.show { display: block; }
+  .qrow-bar-track { height: 4px; background: var(--panel-3); border-radius: 3px; overflow: hidden; margin-top: 5px; display: none; }
+  .qrow-bar-track.show { display: block; }
+  .qrow-bar-fill { height: 100%; width: 0%; background: var(--accent); transition: width .2s ease; }
+  .qrow-bar-fill.indeterminate { width: 35% !important; animation: slide 1.1s infinite ease-in-out; }
+  @keyframes slide { 0% { margin-left: 0%; } 50% { margin-left: 65%; } 100% { margin-left: 0%; } }
+  .qrow.done { border-color: var(--accent-dim); }
+  .qrow.error { border-color: var(--error); }
+  .qrow-dl {
+    display: none;
+    margin-top: 8px;
+    font-size: 12px;
+    color: var(--accent);
+    text-decoration: none;
+    font-weight: 600;
+  }
+  .qrow-dl.show { display: inline-block; }
+  .qrow-err-msg { display: none; margin-top: 6px; font-size: 11.5px; color: #f0a3a8; }
+  .qrow-err-msg.show { display: block; }
+
+  /* --- format / quality choice --- */
+  .fmt-row, .quality-row { display: flex; gap: 8px; }
+  .opt-btn {
+    flex: 1;
+    background: var(--panel-2);
+    border: 1px solid var(--line);
+    border-radius: 8px;
+    color: var(--text);
+    padding: 10px 8px;
+    font-size: 13.5px;
+    font-weight: 600;
+    cursor: pointer;
+    transition: border-color .15s ease, background .15s ease;
+    text-align: center;
+  }
+  .opt-btn .opt-sub { display: block; font-size: 10.5px; font-weight: 400; color: var(--muted); margin-top: 2px; }
+  .opt-btn:hover { border-color: #454b56; }
+  .opt-btn.active { border-color: var(--accent); background: rgba(79,176,174,0.10); }
+
+  select.res-select {
+    width: 100%;
+    background: var(--panel-2);
+    border: 1px solid var(--line);
+    color: var(--text);
+    padding: 10px;
+    border-radius: 8px;
+    font-size: 13.5px;
+  }
+
+  /* --- convert button --- */
+  .convert-btn {
+    width: 100%;
+    margin-top: 22px;
+    background: var(--accent);
+    border: none;
+    border-radius: 8px;
+    color: #0d1614;
+    font-size: 15px;
+    font-weight: 700;
+    padding: 13px;
+    cursor: pointer;
+    transition: background .15s ease;
+  }
+  .convert-btn:hover:not(:disabled) { background: #63c1bf; }
+  .convert-btn:disabled { background: #2c3238; color: var(--muted); cursor: not-allowed; }
+
+  /* --- overall status --- */
+  .overall-status { margin-top: 16px; display: none; }
+  .overall-status.show { display: block; }
+  .overall-line { display: flex; justify-content: space-between; font-size: 12.5px; color: var(--muted); margin-bottom: 6px; }
+  .overall-track { height: 6px; background: var(--panel-2); border-radius: 4px; overflow: hidden; }
+  .overall-fill { height: 100%; width: 0%; background: var(--accent); transition: width .3s ease; }
+
+  .log-toggle { font-size: 11.5px; color: var(--muted); cursor: pointer; margin-top: 10px; user-select: none; }
+  .log-toggle:hover { color: var(--text); }
+  .log-box {
+    display: none;
+    margin-top: 8px;
+    background: #101216;
+    border: 1px solid var(--line);
+    border-radius: 6px;
+    padding: 10px;
+    font-family: var(--mono);
+    font-size: 10.5px;
+    color: #8fd4d2;
+    max-height: 140px;
+    overflow-y: auto;
+    white-space: pre-wrap;
+    word-break: break-all;
+  }
+  .log-box.show { display: block; }
+
+  /* --- result summary --- */
+  .result-summary {
+    display: none;
+    margin-top: 18px;
+    background: rgba(79,176,174,0.08);
+    border: 1px solid var(--accent-dim);
+    border-radius: 8px;
+    padding: 16px;
+    text-align: center;
+  }
+  .result-summary.show { display: block; }
+  .result-summary .msg { font-size: 13.5px; margin-bottom: 12px; }
+  .result-summary a, .result-summary button {
+    display: inline-block;
+    background: var(--accent);
+    color: #0d1614;
+    text-decoration: none;
+    font-weight: 700;
+    font-size: 14px;
+    padding: 10px 20px;
+    border-radius: 7px;
+    border: none;
+    cursor: pointer;
+  }
+
+  .error-box {
+    display: none;
+    margin-top: 18px;
+    background: rgba(217,99,107,0.08);
+    border: 1px solid var(--error);
+    border-radius: 8px;
+    padding: 14px 16px;
+    font-size: 13px;
+    color: #f0a3a8;
+    line-height: 1.5;
+  }
+  .error-box.show { display: block; }
+
+  .footnote { font-size: 11.5px; color: var(--muted); line-height: 1.6; margin-top: 4px; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>VOB 轉檔工具</h1>
+  <p class="sub">上傳一個或多個 .VOB 檔案，批次轉換為 MP4 或 MOV。整個轉檔過程都在你的瀏覽器裡完成，檔案不會上傳到任何伺服器。</p>
+
+  <div class="panel">
+    <div class="drop" id="dropZone">
+      <div class="icon">📁</div>
+      <div class="main-txt">點擊選擇檔案，或拖曳 VOB 檔到這裡</div>
+      <div class="sub-txt">支援多選 .vob（DVD 影片檔）</div>
+    </div>
+    <input type="file" id="fileInput" accept=".vob" multiple>
+
+    <div class="queue" id="queue"></div>
+
+    <div class="section-label">輸出格式</div>
+    <div class="fmt-row">
+      <button class="opt-btn active" data-fmt="mp4" id="btnMp4">MP4<span class="opt-sub">通用性最高</span></button>
+      <button class="opt-btn" data-fmt="mov" id="btnMov">MOV<span class="opt-sub">QuickTime / macOS</span></button>
+    </div>
+
+    <div class="section-label">畫質 / 檔案大小</div>
+    <div class="quality-row">
+      <button class="opt-btn" data-q="high" id="qHigh">高畫質<span class="opt-sub">檔案較大、較慢</span></button>
+      <button class="opt-btn active" data-q="standard" id="qStandard">標準<span class="opt-sub">推薦</span></button>
+      <button class="opt-btn" data-q="small" id="qSmall">精簡<span class="opt-sub">檔案小、較快</span></button>
+    </div>
+
+    <div class="section-label">解析度</div>
+    <select class="res-select" id="resSelect">
+      <option value="original">維持原始解析度</option>
+      <option value="720">縮小到 720p（1280×720）</option>
+      <option value="480">縮小到 480p（854×480）</option>
+    </select>
+
+    <button class="convert-btn" id="convertBtn" disabled>選擇檔案後即可轉檔</button>
+
+    <div class="overall-status" id="overallStatus">
+      <div class="overall-line">
+        <span id="overallText">準備中…</span>
+        <span id="overallCount"></span>
+      </div>
+      <div class="overall-track"><div class="overall-fill" id="overallFill"></div></div>
+      <div class="log-toggle" id="logToggle">顯示詳細記錄 ▾</div>
+      <div class="log-box" id="logBox"></div>
+    </div>
+
+    <div class="result-summary" id="resultSummary">
+      <div class="msg" id="resultMsg"></div>
+      <button id="downloadAllBtn">全部下載（ZIP）</button>
+    </div>
+
+    <div class="error-box" id="errorBox"></div>
+  </div>
+
+  <p class="footnote">
+    第一次轉檔時需要先載入約 25MB 的轉檔引擎（ffmpeg.wasm），請耐心等候，之後會使用瀏覽器快取。
+    檔案是逐一轉檔（非同時），時間越長、解析度越高越花時間，請保持分頁開啟直到全部完成。
+    「精簡」畫質會同時降低畫質參數，若還想再縮小檔案，可另外搭配「解析度」選項一起降低。
+  </p>
+</div>
+
+<script>
+const CORE_URL = new URL('vendor/core/ffmpeg-core.js', document.baseURI).href;
+
+let ffmpeg = null;
+let ffmpegLoaded = false;
+let currentItemId = null;
+let queue = [];       // { id, file, status, outputBlob, outputName, errorMsg }
+let idCounter = 0;
+let selectedFmt = 'mp4';
+let selectedQuality = 'standard';
+let processing = false;
+
+const QUALITY_PARAMS = {
+  high:     { crf: '18', preset: 'fast' },
+  standard: { crf: '22', preset: 'veryfast' },
+  small:    { crf: '28', preset: 'veryfast' },
+};
+const RES_SCALE = {
+  original: null,
+  '720': '1280:720',
+  '480': '854:480',
+};
+
+const dropZone = document.getElementById('dropZone');
+const fileInput = document.getElementById('fileInput');
+const queueEl = document.getElementById('queue');
+const convertBtn = document.getElementById('convertBtn');
+const btnMp4 = document.getElementById('btnMp4');
+const btnMov = document.getElementById('btnMov');
+const qHigh = document.getElementById('qHigh');
+const qStandard = document.getElementById('qStandard');
+const qSmall = document.getElementById('qSmall');
+const resSelect = document.getElementById('resSelect');
+const overallStatus = document.getElementById('overallStatus');
+const overallText = document.getElementById('overallText');
+const overallCount = document.getElementById('overallCount');
+const overallFill = document.getElementById('overallFill');
+const logToggle = document.getElementById('logToggle');
+const logBox = document.getElementById('logBox');
+const resultSummary = document.getElementById('resultSummary');
+const resultMsg = document.getElementById('resultMsg');
+const downloadAllBtn = document.getElementById('downloadAllBtn');
+const errorBox = document.getElementById('errorBox');
+
+function formatSize(bytes) {
+  if (bytes < 1024 * 1024) return (bytes / 1024).toFixed(0) + ' KB';
+  return (bytes / (1024 * 1024)).toFixed(1) + ' MB';
+}
+
+function resetTopLevelStatus() {
+  resultSummary.classList.remove('show');
+  errorBox.classList.remove('show');
+}
+
+function updateConvertBtn() {
+  const hasFiles = queue.length > 0;
+  convertBtn.disabled = !hasFiles || processing;
+  if (processing) {
+    convertBtn.textContent = '轉檔中…';
+  } else if (hasFiles) {
+    convertBtn.textContent = '開始轉檔 ' + queue.length + ' 個檔案為 ' + selectedFmt.toUpperCase();
+  } else {
+    convertBtn.textContent = '選擇檔案後即可轉檔';
+  }
+}
+
+function renderQueueRow(item) {
+  const row = document.createElement('div');
+  row.className = 'qrow';
+  row.id = 'qrow-' + item.id;
+  row.innerHTML = `
+    <div class="qrow-top">
+      <div class="qrow-name">${item.file.name}</div>
+      <div class="qrow-size">${formatSize(item.file.size)}</div>
+      <button class="qrow-remove" data-id="${item.id}">移除</button>
+    </div>
+    <div class="qrow-status" id="qstatus-${item.id}"></div>
+    <div class="qrow-bar-track" id="qbartrack-${item.id}"><div class="qrow-bar-fill" id="qbar-${item.id}"></div></div>
+    <a class="qrow-dl" id="qdl-${item.id}" download></a>
+    <div class="qrow-err-msg" id="qerr-${item.id}"></div>
+  `;
+  queueEl.appendChild(row);
+  row.querySelector('.qrow-remove').addEventListener('click', () => {
+    if (processing) return;
+    queue = queue.filter(q => q.id !== item.id);
+    row.remove();
+    updateConvertBtn();
+  });
+}
+
+function addFiles(fileList) {
+  let rejected = [];
+  Array.from(fileList).forEach(file => {
+    if (!/\.vob$/i.test(file.name)) {
+      rejected.push(file.name);
+      return;
+    }
+    const item = { id: idCounter++, file, status: 'pending', outputBlob: null, outputName: '', errorMsg: '' };
+    queue.push(item);
+    renderQueueRow(item);
+  });
+  if (rejected.length) {
+    errorBox.textContent = '以下檔案不是 .vob，已略過：' + rejected.join('、');
+    errorBox.classList.add('show');
+  }
+  updateConvertBtn();
+}
+
+dropZone.addEventListener('click', () => fileInput.click());
+fileInput.addEventListener('change', (e) => { addFiles(e.target.files); fileInput.value = ''; });
+
+['dragenter', 'dragover'].forEach(evt => {
+  dropZone.addEventListener(evt, (e) => { e.preventDefault(); dropZone.classList.add('dragover'); });
+});
+['dragleave', 'drop'].forEach(evt => {
+  dropZone.addEventListener(evt, (e) => { e.preventDefault(); dropZone.classList.remove('dragover'); });
+});
+dropZone.addEventListener('drop', (e) => addFiles(e.dataTransfer.files));
+
+function setActiveGroup(buttons, activeBtn) {
+  buttons.forEach(b => b.classList.remove('active'));
+  activeBtn.classList.add('active');
+}
+
+btnMp4.addEventListener('click', () => { selectedFmt = 'mp4'; setActiveGroup([btnMp4, btnMov], btnMp4); updateConvertBtn(); });
+btnMov.addEventListener('click', () => { selectedFmt = 'mov'; setActiveGroup([btnMp4, btnMov], btnMov); updateConvertBtn(); });
+qHigh.addEventListener('click', () => { selectedQuality = 'high'; setActiveGroup([qHigh, qStandard, qSmall], qHigh); });
+qStandard.addEventListener('click', () => { selectedQuality = 'standard'; setActiveGroup([qHigh, qStandard, qSmall], qStandard); });
+qSmall.addEventListener('click', () => { selectedQuality = 'small'; setActiveGroup([qHigh, qStandard, qSmall], qSmall); });
+
+logToggle.addEventListener('click', () => {
+  logBox.classList.toggle('show');
+  logToggle.textContent = logBox.classList.contains('show') ? '隱藏詳細記錄 ▴' : '顯示詳細記錄 ▾';
+});
+
+function appendLog(line) {
+  logBox.textContent += line + '\n';
+  logBox.scrollTop = logBox.scrollHeight;
+}
+
+// 延遲初始化：只有在真正開始轉檔時才去接觸 FFmpegWASM / FFmpegUtil，
+// 這樣就算轉檔引擎的 CDN 腳本載入失敗或還沒載完，拖曳檔案、選格式等操作都不受影響。
+function getFfmpeg() {
+  if (ffmpeg) return ffmpeg;
+  if (typeof FFmpegWASM === 'undefined' || !FFmpegWASM.FFmpeg) {
+    throw new Error('轉檔引擎（FFmpegWASM）沒有成功載入，請確認網路連線正常後重新整理頁面再試一次。');
+  }
+  ffmpeg = new FFmpegWASM.FFmpeg();
+  ffmpeg.on('log', ({ message }) => appendLog(message));
+  ffmpeg.on('progress', ({ progress }) => {
+    if (currentItemId === null || progress < 0 || progress > 1) return;
+    const bar = document.getElementById('qbar-' + currentItemId);
+    if (bar) {
+      bar.classList.remove('indeterminate');
+      bar.style.width = (progress * 100).toFixed(0) + '%';
+    }
+    const st = document.getElementById('qstatus-' + currentItemId);
+    if (st) st.textContent = '轉檔中… ' + (progress * 100).toFixed(0) + '%';
+  });
+  return ffmpeg;
+}
+
+function fetchFile(x) {
+  if (typeof FFmpegUtil === 'undefined' || !FFmpegUtil.fetchFile) {
+    throw new Error('轉檔引擎（FFmpegUtil）沒有成功載入，請確認網路連線正常後重新整理頁面再試一次。');
+  }
+  return FFmpegUtil.fetchFile(x);
+}
+
+function buildArgs(inputName, outputName) {
+  const q = QUALITY_PARAMS[selectedQuality];
+  const args = ['-i', inputName, '-c:v', 'libx264', '-preset', q.preset, '-crf', q.crf];
+  const scale = RES_SCALE[resSelect.value];
+  if (scale) {
+    args.push('-vf', 'scale=' + scale + ':force_original_aspect_ratio=decrease');
+  }
+  args.push('-c:a', 'aac', '-b:a', '192k', '-movflags', '+faststart', outputName);
+  return args;
+}
+
+async function processQueue() {
+  processing = true;
+  resetTopLevelStatus();
+  overallStatus.classList.add('show');
+  logBox.textContent = '';
+  updateConvertBtn();
+
+  try {
+    const ff = getFfmpeg();
+    if (!ffmpegLoaded) {
+      overallText.textContent = '載入轉檔引擎中（僅第一次需要）…';
+      overallCount.textContent = '';
+      await ff.load({ coreURL: CORE_URL });
+      ffmpegLoaded = true;
+    }
+
+    const total = queue.length;
+    let doneCount = 0;
+
+    for (const item of queue) {
+      if (item.status === 'done') { doneCount++; continue; }
+
+      currentItemId = item.id;
+      const statusEl = document.getElementById('qstatus-' + item.id);
+      const barTrackEl = document.getElementById('qbartrack-' + item.id);
+      const barEl = document.getElementById('qbar-' + item.id);
+      const rowEl = document.getElementById('qrow-' + item.id);
+
+      overallText.textContent = '轉檔中：' + item.file.name;
+      overallCount.textContent = (doneCount) + ' / ' + total + ' 完成';
+      statusEl.classList.add('show');
+      statusEl.textContent = '準備中…';
+      barTrackEl.classList.add('show');
+      barEl.classList.add('indeterminate');
+      barEl.style.width = '';
+
+      try {
+        const inputName = 'in_' + item.id + '.vob';
+        const outputName = 'out_' + item.id + '.' + selectedFmt;
+        await ff.writeFile(inputName, await fetchFile(item.file));
+
+        statusEl.textContent = '轉檔中…';
+        await ff.exec(buildArgs(inputName, outputName));
+
+        const data = await ff.readFile(outputName);
+        const mime = selectedFmt === 'mp4' ? 'video/mp4' : 'video/quicktime';
+        const blob = new Blob([data.buffer], { type: mime });
+        const outName = item.file.name.replace(/\.vob$/i, '') + '.' + selectedFmt;
+
+        item.status = 'done';
+        item.outputBlob = blob;
+        item.outputName = outName;
+
+        const dlEl = document.getElementById('qdl-' + item.id);
+        dlEl.href = URL.createObjectURL(blob);
+        dlEl.download = outName;
+        dlEl.textContent = '下載 ' + outName + '（' + formatSize(blob.size) + '）';
+        dlEl.classList.add('show');
+
+        statusEl.textContent = '完成';
+        barEl.classList.remove('indeterminate');
+        barEl.style.width = '100%';
+        rowEl.classList.add('done');
+
+        try { await ff.deleteFile(inputName); await ff.deleteFile(outputName); } catch (e) {}
+
+        doneCount++;
+      } catch (err) {
+        console.error(err);
+        item.status = 'error';
+        item.errorMsg = err && err.message ? err.message : String(err);
+        rowEl.classList.add('error');
+        statusEl.textContent = '轉檔失敗';
+        barTrackEl.classList.remove('show');
+        const errEl = document.getElementById('qerr-' + item.id);
+        errEl.textContent = item.errorMsg;
+        errEl.classList.add('show');
+      }
+
+      overallCount.textContent = doneCount + ' / ' + total + ' 完成';
+      overallFill.style.width = (doneCount / total * 100).toFixed(0) + '%';
+    }
+
+    currentItemId = null;
+    const successCount = queue.filter(q => q.status === 'done').length;
+    const errorCount = queue.filter(q => q.status === 'error').length;
+
+    overallText.textContent = '全部處理完畢';
+    overallStatus.classList.remove('show');
+
+    if (successCount > 0) {
+      resultMsg.textContent = successCount + ' 個檔案轉檔成功' + (errorCount > 0 ? '，' + errorCount + ' 個失敗' : '') + '。';
+      resultSummary.classList.add('show');
+    }
+    if (errorCount > 0 && successCount === 0) {
+      errorBox.textContent = '全部 ' + errorCount + ' 個檔案轉檔失敗，請查看各檔案下方的錯誤訊息。可能原因：檔案格式不支援、瀏覽器不支援 WebAssembly，或檔案過大導致記憶體不足。';
+      errorBox.classList.add('show');
+    }
+
+  } catch (err) {
+    console.error(err);
+    overallStatus.classList.remove('show');
+    errorBox.textContent = '轉檔引擎載入失敗：' + (err && err.message ? err.message : String(err)) + '\n請確認網路連線正常，並試試 Chrome 或 Edge 最新版本。';
+    errorBox.classList.add('show');
+  } finally {
+    processing = false;
+    updateConvertBtn();
+  }
+}
+
+convertBtn.addEventListener('click', () => {
+  if (queue.length === 0 || processing) return;
+  processQueue();
+});
+
+downloadAllBtn.addEventListener('click', async () => {
+  const doneItems = queue.filter(q => q.status === 'done');
+  if (doneItems.length === 0) return;
+  downloadAllBtn.disabled = true;
+  downloadAllBtn.textContent = '打包中…';
+  try {
+    const zip = new JSZip();
+    doneItems.forEach(item => zip.file(item.outputName, item.outputBlob));
+    const content = await zip.generateAsync({ type: 'blob' });
+    const url = URL.createObjectURL(content);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = 'converted_videos.zip';
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+  } catch (err) {
+    errorBox.textContent = '打包 ZIP 失敗：' + (err && err.message ? err.message : String(err));
+    errorBox.classList.add('show');
+  } finally {
+    downloadAllBtn.disabled = false;
+    downloadAllBtn.textContent = '全部下載（ZIP）';
+  }
+});
+</script>
+</body>
+</html>
