@@ -4,8 +4,8 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>VOB 轉檔工具</title>
-<script src="https://unpkg.com/@ffmpeg/ffmpeg@0.12.10/dist/umd/ffmpeg.js"></script>
-<script src="https://unpkg.com/@ffmpeg/util@0.12.1/dist/umd/index.js"></script>
+<script src="vendor/ffmpeg/ffmpeg.js"></script>
+<script src="vendor/util/index.js"></script>
 <script src="https://unpkg.com/jszip@3.10.1/dist/jszip.min.js"></script>
 <style>
   :root {
@@ -264,7 +264,7 @@
 </div>
 
 <script>
-const CORE_URL = 'https://unpkg.com/@ffmpeg/core@0.12.10/dist/umd/ffmpeg-core.js';
+const CORE_URL = 'vendor/core/ffmpeg-core.js';
 
 let ffmpeg = null;
 let ffmpegLoaded = false;
